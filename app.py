@@ -9,7 +9,7 @@ import pythoncom
 from docx import Document
 
 # Título de la aplicación
-st.title("Resaltador de Palabras Clave 'EINFAN'")
+st.title("Resaltador de Palabras Clave")
 
 # Descripción
 st.write("""
