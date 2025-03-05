@@ -3,9 +3,17 @@ import fitz  # PyMuPDF
 import os
 import unicodedata
 import re
-from docx2pdf import convert
 import time
-import pythoncom
+import io
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.lib.colors import black
+from reportlab.lib.fonts import addMapping
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from docx import Document
 
 # Título de la aplicación
@@ -16,6 +24,53 @@ st.write("""
 Sube un archivo DOCX o pega el texto de cualquier documento y resalta las palabras clave en el PDF generado.
 Puedes especificar si quieres coincidencia exacta o parcial para cada palabra.
 """)
+
+def get_formatted_text(paragraph):
+    """
+    Convierte un párrafo de Word a texto formateado con HTML para ReportLab
+    """
+    text_parts = []
+    
+    for run in paragraph.runs:
+        text = run.text
+        if text.strip():  # Solo procesar si hay texto
+            # Inicio del formato
+            format_start = ''
+            format_end = ''
+            
+            # Aplicar negrita
+            if run.bold:
+                format_start += '<b>'
+                format_end = '</b>' + format_end
+            
+            # Aplicar cursiva
+            if run.italic:
+                format_start += '<i>'
+                format_end = '</i>' + format_end
+            
+            # Aplicar subrayado
+            if run.underline:
+                format_start += '<u>'
+                format_end = '</u>' + format_end
+                
+            # Combinar el texto con sus formatos
+            formatted_text = format_start + text + format_end
+            text_parts.append(formatted_text)
+    
+    return ' '.join(text_parts)
+
+def get_paragraph_alignment(paragraph):
+    """
+    Determina la alineación del párrafo
+    """
+    if paragraph.alignment == 1:
+        return TA_CENTER
+    elif paragraph.alignment == 2:
+        return TA_RIGHT
+    elif paragraph.alignment == 3:
+        return TA_JUSTIFY
+    else:
+        return TA_LEFT
 
 # Función para eliminar acentos
 def remove_accents(input_str):
@@ -30,6 +85,59 @@ def wait_for_file(file_path, timeout=30):
             raise TimeoutError(f"Timeout esperando por el archivo: {file_path}")
         time.sleep(1)
     return True
+
+def docx_to_pdf(docx_path, pdf_path):
+    # Leer el documento DOCX
+    doc = Document(docx_path)
+    
+    # Configurar el documento PDF
+    pdf = SimpleDocTemplate(
+        pdf_path,
+        pagesize=A4,
+        rightMargin=72,
+        leftMargin=72,
+        topMargin=72,
+        bottomMargin=72
+    )
+    
+    # Crear estilo base para el texto
+    base_style = ParagraphStyle(
+        'BaseStyle',
+        fontSize=11,
+        leading=14,
+        spaceBefore=0,
+        spaceAfter=12,
+        allowWidows=0,
+        allowOrphans=0
+    )
+    
+    # Lista para almacenar los elementos del documento
+    story = []
+    
+    # Procesar cada párrafo
+    for para in doc.paragraphs:
+        if para.text.strip():  # Solo procesar párrafos con texto
+            # Crear un estilo específico para este párrafo
+            para_style = ParagraphStyle(
+                'ParaStyle',
+                parent=base_style,
+                alignment=get_paragraph_alignment(para)
+            )
+            
+            # Obtener el texto formateado con HTML
+            formatted_text = get_formatted_text(para)
+            
+            # Crear el párrafo con el estilo y el texto formateado
+            p = Paragraph(formatted_text, para_style)
+            story.append(p)
+            story.append(Spacer(1, 6))
+    
+    # Construir el PDF
+    try:
+        pdf.build(story)
+    except Exception as e:
+        st.error(f"Error al generar el PDF: {str(e)}")
+        raise
 
 # Función para resaltar palabras exactas en PDF
 def highlight_words_in_pdf(input_pdf, output_pdf, words_to_highlight, exact_match_words):
@@ -73,7 +181,7 @@ def highlight_words_in_pdf(input_pdf, output_pdf, words_to_highlight, exact_matc
                     expanded_rect = fitz.Rect(
                         rect.x0 - 2,
                         rect.y0 - 2,
-                        rect.x1 + 5,  # Aumentado para incluir posible puntuación
+                        rect.x1 + 5,
                         rect.y1 + 2
                     )
                     
@@ -95,6 +203,7 @@ def highlight_words_in_pdf(input_pdf, output_pdf, words_to_highlight, exact_matc
     doc.save(output_pdf)
     doc.close()
     return list(palabras_no_encontradas)
+
 # Función para limpiar archivos temporales
 def cleanup_temp_files(files):
     for file in files:
@@ -130,7 +239,7 @@ else:
     # Botón para procesar el texto pegado
     if st.button("Procesar texto", 
                  help="Haz clic para procesar el texto pegado",
-                 disabled=not pasted_text.strip()):  # Deshabilitar si no hay texto
+                 disabled=not pasted_text.strip()):
         if pasted_text.strip():
             content_to_process = "text"
         else:
@@ -188,13 +297,9 @@ if content_to_process:
             doc.add_paragraph(pasted_text)
             doc.save(temp_docx)
 
-        # Convertir DOCX a PDF
+        # Convertir DOCX a PDF usando la nueva función
         with st.spinner("Convirtiendo a PDF..."):
-            pythoncom.CoInitialize()
-            try:
-                convert(temp_docx, temp_pdf)
-            finally:
-                pythoncom.CoUninitialize()
+            docx_to_pdf(temp_docx, temp_pdf)
             
             if not wait_for_file(temp_pdf):
                 raise FileNotFoundError("No se pudo generar el archivo PDF")
